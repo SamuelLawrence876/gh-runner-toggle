@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# grt-down [owner/repo ...]
+# Exit fallback mode: switch CI back to GitHub-hosted and stop the runner(s).
+# Writes a manual "hold" so auto-flip won't re-flip you this billing month.
+# With no args, acts on every repo in repos.txt.
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+mapfile -t REPOS < <(grt_resolve_repos "$@")
+[ "${#REPOS[@]}" -gt 0 ] || grt_die "no repos (pass owner/repo or add to repos.txt)"
+
+for repo in "${REPOS[@]}"; do
+  grt_set_mode "$repo" ubuntu-latest
+  grt_log "$repo: RUNNER=ubuntu-latest (CI back on GitHub-hosted)"
+  grt_stop_one "$repo"
+done
+
+grt_set_hold   # manual override: hold auto-flip until next month / grt-auto

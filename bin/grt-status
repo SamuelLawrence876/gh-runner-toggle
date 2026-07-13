@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# grt-status
+# Show, per covered repo: mode (RUNNER var), GitHub runner status, and local
+# container state — plus this month's Actions-minute usage and the hold state.
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+mapfile -t REPOS < <(grt_all_repos)
+if [ "${#REPOS[@]}" -eq 0 ]; then
+  echo "No repos covered yet. Add one with:  grt-add <owner/repo>"
+  exit 0
+fi
+
+printf '%-34s %-14s %-10s %s\n' "REPO" "MODE" "RUNNER" "CONTAINER"
+printf '%-34s %-14s %-10s %s\n' "----" "----" "------" "---------"
+for repo in "${REPOS[@]}"; do
+  mode="$(grt_get_mode "$repo")"; [ -n "$mode" ] || mode="(unset)"
+  runner="$(grt_runner_status "$repo")"; [ -n "$runner" ] || runner="-"
+  container="$(grt_container_state "$(grt_container_name "$repo")")"; [ -n "$container" ] || container="-"
+  printf '%-34s %-14s %-10s %s\n' "$repo" "$mode" "$runner" "$container"
+done
+
+echo
+used="$(grt_minutes_used)"
+if [ -n "$used" ]; then
+  remaining=$(( GRT_QUOTA - used ))
+  printf 'Actions minutes this month: %s / %s used  (%s remaining, flip margin %s)\n' \
+    "$used" "$GRT_QUOTA" "$remaining" "$GRT_MARGIN"
+else
+  echo "Actions minutes: billing API unavailable."
+fi
+
+hold="$(grt_hold_file)"
+if [ -f "$hold" ]; then
+  echo "Manual hold: active (set $(cat "$hold")) — auto-flip paused until next month or 'grt-auto'."
+else
+  echo "Manual hold: none — auto-flip is in control."
+fi

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# grt-install-autostart
+# Write a Windows Startup entry that runs `grt-start` at every login, so any
+# repo left in self-hosted mode auto-resumes its runner (and clears its backlog)
+# after a reboot. Gated: a no-op for repos not in fallback mode.
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+BASH_EXE="${GRT_BASH_EXE:-C:\\Program Files\\Git\\bin\\bash.exe}"
+
+if [ -n "${APPDATA:-}" ]; then
+  STARTUP="$(cygpath -u "$APPDATA")/Microsoft/Windows/Start Menu/Programs/Startup"
+else
+  STARTUP="$HOME/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"
+fi
+[ -d "$STARTUP" ] || grt_die "Startup folder not found: $STARTUP"
+
+CMD="$STARTUP/gh-runner-toggle-autostart.cmd"
+LOG="$GRT_ROOT/autostart.log"
+
+cat > "$CMD" <<EOF
+@echo off
+REM Auto-start gh-runner-toggle runners at login (gated per repo on the RUNNER var).
+REM Managed by gh-runner-toggle (grt-install-autostart). Delete this file to disable.
+"$BASH_EXE" -lc "'$GRT_BIN_DIR/grt-start' >> '$LOG' 2>&1"
+EOF
+
+grt_log "installed Startup entry: $CMD"
+
+echo
+grt_log "Reminder: set Docker Desktop to start on login (Settings > General) so the runner can come up unattended."

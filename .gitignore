@@ -1,0 +1,12 @@
+# your actual covered-repos list — machine-specific, kept out of the public repo
+# (copy repos.txt.example -> repos.txt, or use `grt add`)
+repos.txt
+
+# local runtime state (hold marker, etc.) — machine-specific
+.state/
+
+# logs written by the auto-start / auto-flip entries
+*.log
+
+# generated Task Scheduler wrapper
+autoflip-task.cmd

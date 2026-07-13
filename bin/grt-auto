@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# grt-auto
+# Release a manual hold now, handing control back to grt-autoflip immediately
+# (instead of waiting for the next billing month). Does not change the mode
+# itself — the next auto-flip check will reconcile it to the minute usage.
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+if [ -f "$(grt_hold_file)" ]; then
+  grt_clear_hold
+  grt_log "manual hold cleared — auto-flip is back in control (runs on next check, or run grt-autoflip now)."
+else
+  grt_log "no manual hold set — auto-flip already in control."
+fi

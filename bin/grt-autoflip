@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# grt-autoflip
+# The unattended brain. Reads this month's Actions-minute usage and drives the
+# mode of ALL covered repos:
+#   remaining < margin  -> self-hosted (flip to this PC before GitHub blocks CI)
+#   remaining >= margin  -> ubuntu-latest (healthy / new cycle -> back to GitHub)
+#
+# Actions minutes are billed per ACCOUNT, so this is one global decision applied
+# to every covered repo. A manual hold (grt-up/grt-down) pauses this for the
+# current billing month. Designed to run every ~30 min via Task Scheduler.
+#
+# Env overrides: GRT_QUOTA (default 2000), GRT_MARGIN (default 100).
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+grt_state_init
+mapfile -t REPOS < <(grt_all_repos)
+[ "${#REPOS[@]}" -gt 0 ] || { grt_log "no covered repos — nothing to do."; exit 0; }
+
+# --- respect a manual hold (auto-expires when the billing month rolls over) --
+hold="$(grt_hold_file)"
+this_month="$(date +%Y-%m)"
+if [ -f "$hold" ]; then
+  hold_month="$(cat "$hold" 2>/dev/null || echo '')"
+  if [ "$hold_month" = "$this_month" ]; then
+    grt_log "manual hold active ($hold_month) — leaving mode unchanged."
+    exit 0
+  fi
+  grt_log "manual hold from $hold_month expired (now $this_month) — resuming auto."
+  grt_clear_hold
+fi
+
+# --- read usage --------------------------------------------------------------
+used="$(grt_minutes_used)"
+if [ -z "$used" ]; then
+  grt_log "billing API unavailable — skipping (mode left unchanged)."
+  exit 0
+fi
+remaining=$(( GRT_QUOTA - used ))
+grt_log "usage: $used/$GRT_QUOTA min used, $remaining remaining (margin $GRT_MARGIN)."
+
+# --- decide the target mode --------------------------------------------------
+if [ "$remaining" -lt "$GRT_MARGIN" ]; then
+  target="self-hosted"; grt_log "low on minutes -> self-hosted."
+else
+  target="ubuntu-latest"; grt_log "minutes healthy -> GitHub-hosted."
+fi
+
+# --- apply to every covered repo (only write when it changes) ---------------
+changed=0
+for repo in "${REPOS[@]}"; do
+  cur="$(grt_get_mode "$repo")"; [ -n "$cur" ] || cur="ubuntu-latest"
+  if [ "$cur" != "$target" ]; then
+    grt_set_mode "$repo" "$target"
+    grt_log "$repo: $cur -> $target"
+    changed=1
+  fi
+done
+
+# --- reconcile capacity (runners) to the target -----------------------------
+if [ "$target" = "self-hosted" ]; then
+  grt_wait_for_docker || { grt_log "Docker not ready — variable flipped, runner will start on next login."; exit 0; }
+  for repo in "${REPOS[@]}"; do grt_start_one "$repo"; done
+else
+  for repo in "${REPOS[@]}"; do grt_stop_one "$repo"; done
+fi
+
+[ "$changed" -eq 1 ] && grt_log "mode change applied." || grt_log "already in target mode."

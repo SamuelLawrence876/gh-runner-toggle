@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# grt-up [owner/repo ...]
+# Enter fallback mode: point CI at this PC and bring the runner(s) up now.
+# Writes a manual "hold" so auto-flip won't revert your choice this billing
+# month. With no args, acts on every repo in repos.txt.
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+mapfile -t REPOS < <(grt_resolve_repos "$@")
+[ "${#REPOS[@]}" -gt 0 ] || grt_die "no repos (pass owner/repo or add to repos.txt)"
+
+for repo in "${REPOS[@]}"; do
+  grt_set_mode "$repo" self-hosted
+  grt_log "$repo: RUNNER=self-hosted (CI now targets this PC)"
+done
+
+grt_set_hold   # manual override: hold auto-flip until next month / grt-auto
+
+grt_wait_for_docker || exit 1
+for repo in "${REPOS[@]}"; do grt_start_one "$repo"; done

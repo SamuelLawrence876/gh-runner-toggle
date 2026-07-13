@@ -1,0 +1,9 @@
+# repos.txt — repos covered by gh-runner-toggle, one "owner/name" per line.
+#
+# Copy this to `repos.txt` (which is gitignored) and add your repos, or just run:
+#   grt add <owner/repo>
+# which appends here and opens the runs-on toggle PR.
+#
+# Lines starting with # and blank lines are ignored. Private repos only.
+#
+# owner/example-repo

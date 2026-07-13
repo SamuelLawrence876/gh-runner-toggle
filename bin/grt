@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# grt — one-word entry point for gh-runner-toggle.
+# Dispatches `grt <command> [args]` to the matching bin/grt-<command> script.
+# Bare `grt` (no args) shows status.
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  cat <<'EOF'
+grt — GitHub Actions self-hosted fallback toggle
+
+Usage: grt <command> [args]      (bare `grt` = status)
+
+Everyday:
+  grt                    show status (mode / runner / container + minutes)
+  grt up   [repo]        out of minutes -> route CI to this PC + start runner
+  grt down [repo]        minutes reset  -> back to GitHub-hosted + stop runner
+  grt status             same as bare `grt`
+
+Setup / admin:
+  grt add <owner/repo>   onboard a repo (RUNNER var + runs-on toggle PR)
+  grt auto               release a manual hold (hand back to auto-flip)
+  grt autoflip           run the minute-check flip right now
+  grt start [repo]       gated runner bring-up (what login auto-start runs)
+  grt stop  [repo]       stop / deregister runner(s)
+  grt install-autostart  write the Windows login auto-start entry
+  grt install-autoflip   register the 30-min auto-flip task
+  grt help               this help
+
+With no [repo], up/down/start/stop act on every repo in repos.txt.
+EOF
+}
+
+cmd="${1:-status}"
+if [ "$#" -gt 0 ]; then shift; fi
+
+case "$cmd" in
+  help|-h|--help)
+    usage ;;
+  up|down|start|stop|status|add|auto|autoflip|install-autostart|install-autoflip)
+    exec bash "$DIR/grt-$cmd" "$@" ;;
+  *)
+    echo "grt: unknown command '$cmd' (try: grt help)" >&2
+    exit 1 ;;
+esac

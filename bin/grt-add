@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# grt-add <owner/repo>
+# Onboard a repo:
+#   1. record it in repos.txt
+#   2. ensure the RUNNER Actions variable exists (default: ubuntu-latest)
+#   3. if its workflows don't already use the toggle, open a PR rewriting every
+#      `runs-on: ubuntu-*` to `${{ vars.RUNNER || 'ubuntu-*' }}`
+# The PR is never merged automatically — merging is your call (it may deploy).
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+REPO="${1:-}"
+[ -n "$REPO" ] || grt_die "usage: grt-add <owner/repo>"
+case "$REPO" in */*) : ;; *) grt_die "repo must be owner/name (got '$REPO')";; esac
+
+# --- sanity: exists + private ------------------------------------------------
+vis="$(gh_api "repos/$REPO" --jq '.visibility' 2>/dev/null || true)"
+[ -n "$vis" ] || grt_die "can't see $REPO (does it exist / are you logged in?)"
+if [ "$vis" != "private" ]; then
+  grt_log "WARNING: $REPO is $vis. A self-hosted runner on a public repo is an RCE risk from fork PRs."
+  read -r -p "Continue anyway? [y/N] " ans; [ "$ans" = "y" ] || exit 1
+fi
+
+# --- 1. record in repos.txt --------------------------------------------------
+touch "$GRT_REPOS_FILE"
+if grt_all_repos | grep -qx "$REPO"; then
+  grt_log "$REPO: already in repos.txt."
+else
+  echo "$REPO" >> "$GRT_REPOS_FILE"
+  grt_log "$REPO: added to repos.txt."
+fi
+
+# --- 2. ensure RUNNER variable exists (don't clobber an existing value) -----
+if [ -z "$(grt_get_mode "$REPO")" ]; then
+  grt_set_mode "$REPO" ubuntu-latest
+  grt_log "$REPO: created RUNNER variable (=ubuntu-latest)."
+else
+  grt_log "$REPO: RUNNER variable already set to '$(grt_get_mode "$REPO")'."
+fi
+
+# --- 3. wire the workflows (via PR) ------------------------------------------
+# Escape hatch: skip the workflow PR (e.g. the toggle is already handled by an
+# existing open PR you opened by hand).
+if [ -n "${GRT_SKIP_PR:-}" ]; then
+  grt_log "$REPO: GRT_SKIP_PR set — registered without opening a workflow PR."
+  exit 0
+fi
+
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+grt_log "$REPO: cloning to inspect workflows…"
+gh repo clone "$REPO" "$tmp/repo" -- --depth 1 --quiet 2>/dev/null || grt_die "clone failed"
+wf="$tmp/repo/.github/workflows"
+if [ ! -d "$wf" ] || ! ls "$wf"/*.y*ml >/dev/null 2>&1; then
+  grt_log "$REPO: no workflows found — nothing to wire. Done."
+  exit 0
+fi
+
+# sed program in its own file so nothing needs shell-quoting.
+prog="$tmp/toggle.sed"
+cat > "$prog" <<'EOF'
+s/^\([[:space:]]*\)runs-on:[[:space:]]*ubuntu-\([a-z0-9.]*\)[[:space:]]*$/\1runs-on: ${{ vars.RUNNER || 'ubuntu-\2' }}/
+s/^\([[:space:]]*\)runs-on:[[:space:]]*"ubuntu-\([a-z0-9.]*\)"[[:space:]]*$/\1runs-on: ${{ vars.RUNNER || 'ubuntu-\2' }}/
+s/^\([[:space:]]*\)runs-on:[[:space:]]*'ubuntu-\([a-z0-9.]*\)'[[:space:]]*$/\1runs-on: ${{ vars.RUNNER || 'ubuntu-\2' }}/
+EOF
+
+for f in "$wf"/*.y*ml; do sed -i -f "$prog" "$f"; done
+
+cd "$tmp/repo"
+if git diff --quiet; then
+  if git grep -q "vars.RUNNER" -- .github/workflows 2>/dev/null; then
+    grt_log "$REPO: workflows already use the RUNNER toggle ✓ — no PR needed."
+  else
+    grt_log "$REPO: no 'runs-on: ubuntu-*' jobs found to rewrite — review workflows manually."
+  fi
+  exit 0
+fi
+
+grt_log "$REPO: rewriting runs-on in:"
+git --no-pager diff --stat
+
+branch="grt/runner-toggle"
+git checkout -q -b "$branch"
+git commit -qam "ci: route runs-on through the RUNNER variable (gh-runner-toggle)"
+git push -q -u origin "$branch"
+gh pr create --repo "$REPO" --head "$branch" \
+  --title "ci: route runs-on through the RUNNER variable" \
+  --body "Adds a self-hosted fallback toggle: every job now reads \`runs-on: \${{ vars.RUNNER || 'ubuntu-latest' }}\`. Flip the repo's \`RUNNER\` Actions variable to switch compute targets — no further workflow edits. Opened by gh-runner-toggle \`grt-add\`."
+grt_log "$REPO: PR opened. Review + merge when ready (merging may trigger a deploy)."

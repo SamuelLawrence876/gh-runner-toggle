@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# grt-stop [owner/repo ...]
+# Stop + deregister the local runner container(s). Does NOT change the RUNNER
+# variable (use grt-down to also switch back to GitHub-hosted). With no args,
+# acts on every repo in repos.txt.
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+mapfile -t REPOS < <(grt_resolve_repos "$@")
+for repo in "${REPOS[@]}"; do grt_stop_one "$repo"; done
+grt_log "done."

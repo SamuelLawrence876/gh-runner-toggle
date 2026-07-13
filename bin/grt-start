@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# grt-start [owner/repo ...]
+# Boot-safe, gated bring-up. Registers a runner ONLY for repos whose RUNNER
+# variable == self-hosted; a quiet no-op otherwise. Does NOT change the mode.
+# This is what the Windows Startup entry runs at every login. With no args,
+# acts on every repo in repos.txt.
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+mapfile -t REPOS < <(grt_resolve_repos "$@")
+[ "${#REPOS[@]}" -gt 0 ] || { grt_log "no repos to start."; exit 0; }
+
+# Only bother waiting for Docker if at least one repo is actually in fallback.
+need=0
+for repo in "${REPOS[@]}"; do
+  [ "$(grt_get_mode "$repo")" = "self-hosted" ] && need=1
+done
+if [ "$need" -eq 0 ]; then
+  grt_log "no repo is in self-hosted mode — nothing to start."
+  exit 0
+fi
+
+grt_wait_for_docker || exit 0
+for repo in "${REPOS[@]}"; do grt_start_one "$repo"; done

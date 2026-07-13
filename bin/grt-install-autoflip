@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# grt-install-autoflip
+# Register a Windows Task Scheduler job that runs `grt-autoflip` every N minutes
+# (default 30) to auto-switch all covered repos to self-hosted when Actions
+# minutes run low and back when they reset. Runs in the logged-in user session
+# so it can reach the gh keyring and Docker.
+#   Env: GRT_AUTOFLIP_MINUTES (default 30)
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+BASH_EXE="${GRT_BASH_EXE:-C:\\Program Files\\Git\\bin\\bash.exe}"
+INTERVAL="${GRT_AUTOFLIP_MINUTES:-30}"
+TASK="gh-runner-toggle autoflip"
+WRAPPER="$GRT_ROOT/autoflip-task.cmd"
+LOG="$GRT_ROOT/autoflip.log"
+
+# Wrapper .cmd so Task Scheduler has a single, quoting-safe target.
+cat > "$WRAPPER" <<EOF
+@echo off
+REM gh-runner-toggle auto-flip check. Managed by grt-install-autoflip.
+"$BASH_EXE" -lc "'$GRT_BIN_DIR/grt-autoflip' >> '$LOG' 2>&1"
+EOF
+grt_log "wrote auto-flip wrapper: $WRAPPER"
+
+WRAPPER_WIN="$(cygpath -w "$WRAPPER")"
+MSYS_NO_PATHCONV=1 schtasks /Create \
+  /TN "$TASK" \
+  /TR "\"$WRAPPER_WIN\"" \
+  /SC MINUTE /MO "$INTERVAL" \
+  /F >/dev/null
+
+grt_log "registered Task Scheduler job '$TASK' — runs every ${INTERVAL} min."
+grt_log "check it with:   schtasks //Query //TN \"$TASK\""
+grt_log "remove it with:  schtasks //Delete //TN \"$TASK\" //F"
+echo
+grt_log "Tip: keep a GitHub spending cap set as a backstop against billing lag."
