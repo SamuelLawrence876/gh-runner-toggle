@@ -119,6 +119,10 @@ With no `[repo]`, the up/down/start/stop commands act on **all** repos in
   busy runner can't saturate the PC while you're using it.
 - **You get told** — a Windows toast fires whenever auto-flip moves CI onto or
   off this PC. Logs self-truncate.
+- **Docker hygiene** — a weekly pass (piggybacked on auto-flip) prunes the CI
+  leftovers that otherwise grow forever: dangling layers from runner-image
+  re-pulls, local `cdkasset-*` tags (ECR holds the published copies), and
+  build cache unused for a week. Other projects' images are never touched.
 - **Known assumption** — minute usage + hold expiry work on the *calendar*
   month. If your GitHub billing cycle resets mid-month, the flip-back can run
   up to a cycle late/early; the margin absorbs small drift.

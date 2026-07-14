@@ -311,6 +311,31 @@ grt_stop_one() {
   done
 }
 
+# --- weekly docker hygiene ----------------------------------------------------
+# CI-generated artifacts accumulate on the HOST daemon: each cdk deploy leaves
+# cdkasset-* image tags + build cache, and runner-image re-pulls orphan the old
+# layers as dangling images. Prune ONLY those CI leftovers weekly — never other
+# projects' images. Deleting local cdkasset tags is free: ECR holds the
+# published copies and cdk-assets skips rebuilds for unchanged assets.
+grt_prune_docker() {
+  local marker now last
+  grt_state_init
+  marker="$GRT_STATE_DIR/last-prune"
+  now="$(date +%s)"
+  last="$(cat "$marker" 2>/dev/null || echo 0)"
+  [ $((now - last)) -ge $((7 * 86400)) ] || return 0
+  docker info >/dev/null 2>&1 || return 0
+  grt_log "weekly docker hygiene: pruning CI build leftovers…"
+  docker image prune -f >/dev/null 2>&1 || true
+  docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+    | awk '/^cdkasset-|\/cdk-.*container-assets/' \
+    | while read -r ref; do docker rmi "$ref" >/dev/null 2>&1 || true; done \
+    || true
+  docker builder prune -af --filter until=168h >/dev/null 2>&1 || true
+  date +%s > "$marker"
+  grt_log "docker hygiene done."
+}
+
 # --- billing -----------------------------------------------------------------
 # Actions minutes consumed this calendar month, summed across all repos.
 # Uses the Enhanced Billing usage endpoint (the classic one is 410 Gone).

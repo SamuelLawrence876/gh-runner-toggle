@@ -89,3 +89,6 @@ else
     for repo in "${REPOS[@]}"; do grt_stop_one "$repo"; done
   fi
 fi
+
+# --- weekly hygiene: prune CI docker leftovers (dangling layers, cdkasset-*) --
+grt_prune_docker
