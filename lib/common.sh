@@ -121,7 +121,13 @@ grt_legacy_container_name() { printf '%s-runner' "$(grt_repo_slug "$1")"; }
 grt_legacy_runner_name()    { printf '%s-pc' "$(grt_repo_slug "$1")"; }
 
 # --- RUNNER variable (the "mode") -------------------------------------------
-grt_get_mode() { gh_api "repos/$1/actions/variables/RUNNER" --jq .value 2>/dev/null || printf ''; }
+# NB: `gh api` prints the error BODY (JSON) to stdout on a 404, so the output
+# is only trustworthy when the call succeeds — discard it otherwise.
+grt_get_mode() {
+  local v
+  v="$(gh_api "repos/$1/actions/variables/RUNNER" --jq .value 2>/dev/null)" || v=""
+  printf '%s' "$v"
+}
 grt_set_mode() { gh variable set RUNNER --repo "$1" --body "$2" >/dev/null; }
 
 # --- state markers -----------------------------------------------------------
