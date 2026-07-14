@@ -211,7 +211,7 @@ grt_containers_running() {
       *) seen=1 ;;
     esac
   done
-  [ "$seen" -eq 1 ] && printf '%s/%s running' "$n" "$count" || true
+  if [ "$seen" -eq 1 ]; then printf '%s/%s running' "$n" "$count"; fi
 }
 
 # --- bring one repo's runners up (gated, boot-safe, idempotent) --------------
