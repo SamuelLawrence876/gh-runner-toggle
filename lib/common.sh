@@ -11,6 +11,7 @@ set -euo pipefail
 # This file lives in lib/, so the repo root is one level up.
 GRT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GRT_ROOT="$(cd "$GRT_LIB_DIR/.." && pwd)"
+# shellcheck disable=SC2034  # used by the bin/grt-install-* scripts that source this file
 GRT_BIN_DIR="$GRT_ROOT/bin"
 GRT_STATE_DIR="$GRT_ROOT/.state"
 GRT_REPOS_FILE="$GRT_ROOT/repos.txt"
@@ -20,10 +21,48 @@ GRT_IMAGE="${GRT_IMAGE:-myoung34/github-runner:latest}"
 GRT_LABEL="${GRT_LABEL:-self-hosted}"
 GRT_QUOTA="${GRT_QUOTA:-2000}"    # included Actions minutes/month (free plan)
 GRT_MARGIN="${GRT_MARGIN:-100}"   # flip to self-hosted when remaining < this
+# Per-container resource caps so busy runners can't saturate the PC while it's
+# in use. Set to "" to uncap.
+GRT_CPUS="${GRT_CPUS:-4}"
+GRT_MEMORY="${GRT_MEMORY:-6g}"
+# Re-pull the runner image when the local copy is older than this. GitHub
+# force-retires old runner clients, so a never-refreshed image is a time bomb:
+# everything looks online while every job fails "runner version too old".
+# (Containers also self-update between restarts; this keeps fresh starts near
+# current so they don't spend their first minutes updating.)
+GRT_IMAGE_MAX_AGE_DAYS="${GRT_IMAGE_MAX_AGE_DAYS:-7}"
 
 # --- logging -----------------------------------------------------------------
 grt_log() { echo "[$(date '+%H:%M:%S')] $*"; }
 grt_die() { echo "error: $*" >&2; exit 1; }
+
+# Keep an append-only log from growing forever. Truncates IN PLACE (cat >, not
+# mv) because the caller's own stdout may hold an O_APPEND fd on this file —
+# replacing the inode would silently divert subsequent writes.
+grt_rotate_log() {
+  local f="$1" max=$((512 * 1024)) size
+  [ -f "$f" ] || return 0
+  size="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+  [ "$size" -gt "$max" ] || return 0
+  tail -n 200 "$f" > "$f.tmp" && cat "$f.tmp" > "$f" && rm -f "$f.tmp"
+}
+
+# --- desktop notification (best-effort, Windows toast) ------------------------
+# Auto-flip silently redirecting ALL CI to (or away from) this PC is worth a
+# heads-up. No single quotes in the arguments.
+grt_notify() {
+  local title="$1" body="$2"
+  command -v powershell.exe >/dev/null 2>&1 || return 0
+  MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -Command "
+    [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null;
+    \$x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);
+    \$t = \$x.GetElementsByTagName('text');
+    \$t.Item(0).AppendChild(\$x.CreateTextNode('$title')) | Out-Null;
+    \$t.Item(1).AppendChild(\$x.CreateTextNode('$body')) | Out-Null;
+    \$appid = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe';
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(\$appid).Show([Windows.UI.Notifications.ToastNotification]::new(\$x));
+  " >/dev/null 2>&1 || true
+}
 
 # --- gh wrapper --------------------------------------------------------------
 # Git Bash rewrites leading-slash API paths (e.g. /users/...) into Windows
@@ -103,6 +142,25 @@ grt_wait_for_docker() {
   return 1
 }
 
+# Pull the runner image if it's missing or older than GRT_IMAGE_MAX_AGE_DAYS.
+# Best-effort: an offline pull must never block bringing a runner back up on
+# the image we already have.
+grt_ensure_image() {
+  local created age_days
+  if ! docker image inspect "$GRT_IMAGE" >/dev/null 2>&1; then
+    grt_log "pulling $GRT_IMAGE…"
+    docker pull "$GRT_IMAGE"
+    return 0
+  fi
+  created="$(docker image inspect "$GRT_IMAGE" --format '{{.Created}}' 2>/dev/null || true)"
+  [ -n "$created" ] || return 0
+  age_days=$(( ($(date +%s) - $(date -d "$created" +%s 2>/dev/null || date +%s)) / 86400 ))
+  if [ "$age_days" -ge "$GRT_IMAGE_MAX_AGE_DAYS" ]; then
+    grt_log "runner image is ${age_days}d old — refreshing $GRT_IMAGE…"
+    docker pull "$GRT_IMAGE" || grt_log "pull failed — continuing on the cached image."
+  fi
+}
+
 # --- container state ---------------------------------------------------------
 # Echoes the container's status ("running", "exited", …) or "" if it doesn't
 # exist. NB: `docker inspect` on a missing container prints a blank line to
@@ -112,16 +170,27 @@ grt_container_state() {
 }
 
 # --- runner online state (from GitHub) --------------------------------------
-# echoes "k/N online" for this machine's runners on the repo, or "" if none.
+# echoes "k/N online" (plus ", j busy" while working) for this machine's
+# runners on the repo, or "" if none are registered.
 grt_runner_status() {
-  local repo="$1" base count online name n=0
+  local repo="$1" base count name status busy n=0 b=0
   base="$(grt_machine_name)"; count="$(grt_repo_count "$repo")"
-  online="$(gh_api "repos/$repo/actions/runners" \
-    --jq '[.runners[] | select(.status=="online") | .name] | join(" ")' 2>/dev/null)" || online=""
-  for name in $online; do
-    case "$name" in "$base"-[0-9]|"$base"-[0-9][0-9]) n=$((n+1)) ;; esac
-  done
-  [ "$n" -gt 0 ] && printf '%s/%s online' "$n" "$count" || true
+  while read -r name status busy; do
+    case "$name" in
+      "$base"-[0-9]|"$base"-[0-9][0-9])
+        [ "$status" = "online" ] && n=$((n+1))
+        [ "$busy" = "true" ] && b=$((b+1))
+        ;;
+    esac
+  done < <(gh_api "repos/$repo/actions/runners" \
+             --jq '.runners[] | "\(.name) \(.status) \(.busy)"' 2>/dev/null || true)
+  if [ "$n" -gt 0 ]; then
+    if [ "$b" -gt 0 ]; then
+      printf '%s/%s online, %s busy' "$n" "$count" "$b"
+    else
+      printf '%s/%s online' "$n" "$count"
+    fi
+  fi
 }
 
 # --- container aggregate state ------------------------------------------------
@@ -142,13 +211,14 @@ grt_containers_running() {
 # --- bring one repo's runners up (gated, boot-safe, idempotent) --------------
 grt_start_one() {
   local repo="$1" mode count i container name old token started=0
+  local -a caps
   mode="$(grt_get_mode "$repo")"
   if [ "$mode" != "self-hosted" ]; then
     grt_log "$repo: RUNNER='$mode' (GitHub-hosted) — nothing to start."
     return 0
   fi
   count="$(grt_repo_count "$repo")"
-  docker image inspect "$GRT_IMAGE" >/dev/null 2>&1 || { grt_log "pulling $GRT_IMAGE…"; docker pull "$GRT_IMAGE"; }
+  grt_ensure_image
 
   # Retire pre-multi-instance leftovers (the unsuffixed container and the old
   # <repo>-pc registration) so an upgrade cleanly replaces them.
@@ -187,13 +257,18 @@ grt_start_one() {
     token="$(gh_api --method POST "repos/$repo/actions/runners/registration-token" --jq .token)"
     [ -n "$token" ] || { grt_log "$repo: could not get a registration token (check gh auth)."; return 1; }
     docker rm -f "$container" >/dev/null 2>&1 || true
-    docker run -d --name "$container" --restart no \
+    # Resource caps (tunables above) keep a busy runner from saturating the PC.
+    # Auto-update stays ENABLED: GitHub retires old runner clients, and a pinned
+    # client eventually looks online while every job fails "version too old".
+    caps=()
+    [ -n "$GRT_CPUS" ] && caps+=(--cpus "$GRT_CPUS")
+    [ -n "$GRT_MEMORY" ] && caps+=(--memory "$GRT_MEMORY")
+    docker run -d --name "$container" --restart no "${caps[@]}" \
       -e REPO_URL="https://github.com/$repo" \
       -e RUNNER_TOKEN="$token" \
       -e RUNNER_NAME="$name" \
       -e RUNNER_SCOPE="repo" \
       -e LABELS="$GRT_LABEL" \
-      -e DISABLE_AUTO_UPDATE="true" \
       "$GRT_IMAGE" >/dev/null
     started=$((started+1))
   done

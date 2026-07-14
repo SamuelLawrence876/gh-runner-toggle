@@ -80,6 +80,7 @@ decision.) Reboots auto-resume via the Startup entry.
 | `grt add <owner/repo>` | onboard a repo: RUNNER var + `runs-on` toggle PR + repos.txt |
 | `grt start [repo]` | gated, boot-safe bring-up (used by auto-start); no mode change |
 | `grt stop [repo]` | stop + deregister runner container(s) |
+| `grt logs [repo] [-n N]` | tail the runner containers' Docker logs |
 | `grt autoflip` | flip all covered repos from live minute usage (Task Scheduler) |
 | `grt auto` | release a manual hold now (hand control back to auto-flip) |
 | `grt install-autostart` | write the Windows Startup entry |
@@ -91,10 +92,31 @@ With no `[repo]`, the up/down/start/stop commands act on **all** repos in
 
 ## Configuration
 
-- `repos.txt` — covered repos, one `owner/name` per line.
+- `repos.txt` — covered repos, one `owner/name [count]` per line (count =
+  runner instances for that repo, default 1).
 - Env overrides: `GRT_QUOTA` (included minutes/month, default `2000`),
   `GRT_MARGIN` (flip threshold, default `100`), `GRT_IMAGE`, `GRT_LABEL`,
+  `GRT_CPUS` / `GRT_MEMORY` (per-container caps, default `4` / `6g`, `""` = uncapped),
+  `GRT_IMAGE_MAX_AGE_DAYS` (re-pull the runner image past this age, default `7`),
+  `GRT_RUNNER_BASENAME` (runner name prefix, default from `hostname`),
   `GRT_AUTOFLIP_MINUTES` (check interval, default `30`), `GRT_BASH_EXE`.
+
+## Guard rails (what keeps it healthy unattended)
+
+- **Runner freshness** — the runner client auto-updates in place, and the image
+  is re-pulled once it's older than `GRT_IMAGE_MAX_AGE_DAYS`. (GitHub retires
+  old runner clients: a pinned one eventually looks online while every job
+  fails "version too old".)
+- **Capacity self-heals** — every auto-flip check reconciles containers to each
+  repo's mode, even under a manual hold, so a Docker restart never strands the
+  runners until the next login.
+- **Resource caps** — each container is capped (`GRT_CPUS`/`GRT_MEMORY`) so a
+  busy runner can't saturate the PC while you're using it.
+- **You get told** — a Windows toast fires whenever auto-flip moves CI onto or
+  off this PC. Logs self-truncate.
+- **Known assumption** — minute usage + hold expiry work on the *calendar*
+  month. If your GitHub billing cycle resets mid-month, the flip-back can run
+  up to a cycle late/early; the margin absorbs small drift.
 
 ## Requirements
 

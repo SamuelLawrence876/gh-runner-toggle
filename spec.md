@@ -79,6 +79,11 @@ Each covered repo has:
 - Registration token fetched fresh each start via `gh api` — **no PAT stored on disk**.
 - `--restart no`; reboots are handled by the login entry (so it can refresh the token), not
   Docker's restart policy.
+- Runner **auto-update stays enabled** and the image is re-pulled once older than
+  `GRT_IMAGE_MAX_AGE_DAYS` (default 7) — GitHub retires old runner clients, so a pinned client
+  eventually sits "online" while every job fails "version too old".
+- Containers are resource-capped (`GRT_CPUS`/`GRT_MEMORY`, default 4 CPUs / 6 GB each) so busy
+  runners can't saturate the PC while it's in use.
 
 ### 4.4 Gated auto-start
 - A Windows Startup entry runs the boot script at every login.
@@ -107,6 +112,11 @@ Each covered repo has:
   overshoot into paid minutes is bounded.
 - **Manual override.** `grt-up`/`grt-down` still work and take precedence; auto-flip must respect a
   manual "hold" so a deliberate choice isn't reverted by the next check (see open questions).
+- **Capacity always reconciles.** A hold freezes the *mode decision only* — every check still
+  restarts dead containers for self-hosted repos and sweeps leftovers for hosted ones, so a Docker
+  restart under a hold self-heals within one interval instead of waiting for the next login.
+- **Mode flips notify.** Auto-flip fires a Windows toast when it moves CI onto or off this PC —
+  a silent redirection of all CI is worth a heads-up.
 
 ## 5. Components & interface
 

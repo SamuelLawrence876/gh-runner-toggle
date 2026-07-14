@@ -7,6 +7,7 @@
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
 
+grt_rotate_log "$GRT_ROOT/autostart.log"
 mapfile -t REPOS < <(grt_resolve_repos "$@")
 [ "${#REPOS[@]}" -gt 0 ] || { grt_log "no repos to start."; exit 0; }
 

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# grt-logs [owner/repo ...] [-n LINES]
+# Tail the Docker logs of each repo's runner container(s) — the fastest way to
+# see why a runner is offline or what a job is doing. With no repo args, acts
+# on every repo in repos.txt. Default 40 lines per container.
+set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
+
+LINES=40
+ARGS=()
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -n) LINES="${2:-40}"; shift 2 ;;
+    *) ARGS+=("$1"); shift ;;
+  esac
+done
+
+mapfile -t REPOS < <(grt_resolve_repos "${ARGS[@]}")
+[ "${#REPOS[@]}" -gt 0 ] || grt_die "no repos (pass owner/repo or add to repos.txt)"
+
+docker info >/dev/null 2>&1 || grt_die "Docker not running"
+
+for repo in "${REPOS[@]}"; do
+  count="$(grt_repo_count "$repo")"
+  for i in $(seq 1 "$count"); do
+    container="$(grt_container_name "$repo" "$i")"
+    state="$(grt_container_state "$container")"
+    echo "===== $container (${state:-absent}) ====="
+    [ -n "$state" ] && docker logs --tail "$LINES" "$container" 2>&1
+  done
+done

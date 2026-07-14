@@ -23,6 +23,7 @@ Setup / admin:
   grt autoflip           run the minute-check flip right now
   grt start [repo]       gated runner bring-up (what login auto-start runs)
   grt stop  [repo]       stop / deregister runner(s)
+  grt logs  [repo] [-n N]  tail the runner containers' Docker logs
   grt install-autostart  write the Windows login auto-start entry
   grt install-autoflip   register the 30-min auto-flip task
   grt help               this help
@@ -37,7 +38,7 @@ if [ "$#" -gt 0 ]; then shift; fi
 case "$cmd" in
   help|-h|--help)
     usage ;;
-  up|down|start|stop|status|add|auto|autoflip|install-autostart|install-autoflip)
+  up|down|start|stop|status|add|auto|autoflip|logs|install-autostart|install-autoflip)
     exec bash "$DIR/grt-$cmd" "$@" ;;
   *)
     echo "grt: unknown command '$cmd' (try: grt help)" >&2
