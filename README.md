@@ -20,7 +20,13 @@ Every job's `runs-on` reads `${{ vars.RUNNER || 'ubuntu-latest' }}`. The repo's
 Two independent layers:
 
 - **Mode** — the `RUNNER` variable (where jobs route).
-- **Capacity** — the runner container (whether a runner is available right now).
+- **Capacity** — the runner container(s) (whether a runner is available right now).
+
+Runners are named after the machine (`sam-pc-1`, `sam-pc-2`, …), not the repo —
+the registration is already repo-scoped, so the name only needs to say where the
+runner lives. A repo can run several instances (the optional count column in
+`repos.txt`, e.g. `owner/busy-repo 2`) so parallel workflow jobs genuinely run
+in parallel instead of queueing on a single runner.
 
 Decoupling them is what makes auto-start safe: the login script brings a runner
 up **only** for repos whose mode is `self-hosted`, and idles otherwise.

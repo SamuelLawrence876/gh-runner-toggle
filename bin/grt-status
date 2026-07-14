@@ -11,13 +11,13 @@ if [ "${#REPOS[@]}" -eq 0 ]; then
   exit 0
 fi
 
-printf '%-34s %-14s %-10s %s\n' "REPO" "MODE" "RUNNER" "CONTAINER"
-printf '%-34s %-14s %-10s %s\n' "----" "----" "------" "---------"
+printf '%-34s %-14s %-12s %s\n' "REPO" "MODE" "RUNNERS" "CONTAINERS"
+printf '%-34s %-14s %-12s %s\n' "----" "----" "-------" "----------"
 for repo in "${REPOS[@]}"; do
   mode="$(grt_get_mode "$repo")"; [ -n "$mode" ] || mode="(unset)"
   runner="$(grt_runner_status "$repo")"; [ -n "$runner" ] || runner="-"
-  container="$(grt_container_state "$(grt_container_name "$repo")")"; [ -n "$container" ] || container="-"
-  printf '%-34s %-14s %-10s %s\n' "$repo" "$mode" "$runner" "$container"
+  container="$(grt_containers_running "$repo")"; [ -n "$container" ] || container="-"
+  printf '%-34s %-14s %-12s %s\n' "$repo" "$mode" "$runner" "$container"
 done
 
 echo

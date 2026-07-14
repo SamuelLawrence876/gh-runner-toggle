@@ -1,9 +1,14 @@
-# repos.txt — repos covered by gh-runner-toggle, one "owner/name" per line.
+# repos.txt — repos covered by gh-runner-toggle, one "owner/name [count]" per line.
 #
 # Copy this to `repos.txt` (which is gitignored) and add your repos, or just run:
 #   grt add <owner/repo>
 # which appends here and opens the runs-on toggle PR.
 #
+# The optional count = how many runner instances to run for that repo
+# (default 1). Use 2+ so a workflow's parallel jobs actually run in parallel
+# instead of queueing on a single runner.
+#
 # Lines starting with # and blank lines are ignored. Private repos only.
 #
 # owner/example-repo
+# owner/busy-repo 2

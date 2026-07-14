@@ -40,9 +40,23 @@ grt_user() {
 
 # --- repo list ---------------------------------------------------------------
 # All covered repos from repos.txt, skipping blank lines and # comments.
+# Line format: "owner/name [count]" — count = how many runner instances to run
+# for that repo (default 1). Two instances let a workflow's parallel jobs
+# actually run in parallel instead of queueing on a single runner.
 grt_all_repos() {
   [ -f "$GRT_REPOS_FILE" ] || return 0
   sed -E 's/#.*$//' "$GRT_REPOS_FILE" | awk 'NF { print $1 }'
+}
+
+# Instance count for a repo: the optional second column in repos.txt.
+grt_repo_count() {
+  local n=""
+  if [ -f "$GRT_REPOS_FILE" ]; then
+    n="$(sed -E 's/#.*$//' "$GRT_REPOS_FILE" | awk -v r="$1" '$1==r { print $2; exit }')"
+  fi
+  case "$n" in ''|*[!0-9]*) n=1 ;; esac
+  [ "$n" -ge 1 ] || n=1
+  printf '%s' "$n"
 }
 
 # Which repos a command acts on: its args if any, else every covered repo.
@@ -51,9 +65,21 @@ grt_resolve_repos() {
 }
 
 # --- naming ------------------------------------------------------------------
-grt_repo_slug()      { printf '%s' "${1##*/}"; }          # owner/name -> name
-grt_container_name() { printf '%s-runner' "$(grt_repo_slug "$1")"; }
-grt_runner_name()    { printf '%s-pc' "$(grt_repo_slug "$1")"; }
+# Runners are named after THIS MACHINE (sam-pc-1, sam-pc-2, …), not the repo: a
+# registration is already scoped to one repo, so the name's job is to say WHERE
+# the runner lives. Containers stay repo-prefixed (night-in-runner-1) because
+# the local Docker namespace is shared across every covered repo.
+grt_repo_slug()   { printf '%s' "${1##*/}"; }             # owner/name -> name
+grt_machine_name() {
+  if [ -n "${GRT_RUNNER_BASENAME:-}" ]; then printf '%s' "$GRT_RUNNER_BASENAME"; return; fi
+  hostname | tr '[:upper:]_' '[:lower:]-' | tr -cd 'a-z0-9-'
+}
+grt_container_name() { printf '%s-runner-%s' "$(grt_repo_slug "$1")" "$2"; }  # <repo> <index>
+grt_runner_name()    { printf '%s-%s' "$(grt_machine_name)" "$1"; }           # <index>
+# Pre-multi-instance names ("<repo>-runner" / "<repo>-pc"), swept during
+# start/stop so an upgrade cleanly replaces them.
+grt_legacy_container_name() { printf '%s-runner' "$(grt_repo_slug "$1")"; }
+grt_legacy_runner_name()    { printf '%s-pc' "$(grt_repo_slug "$1")"; }
 
 # --- RUNNER variable (the "mode") -------------------------------------------
 grt_get_mode() { gh_api "repos/$1/actions/variables/RUNNER" --jq .value 2>/dev/null || printf ''; }
@@ -86,63 +112,105 @@ grt_container_state() {
 }
 
 # --- runner online state (from GitHub) --------------------------------------
-# echoes the runner's status ("online"/"offline") or "" if not registered.
+# echoes "k/N online" for this machine's runners on the repo, or "" if none.
 grt_runner_status() {
-  local repo="$1" name
-  name="$(grt_runner_name "$repo")"
-  gh_api "repos/$repo/actions/runners" \
-    --jq '.runners[] | "\(.name) \(.status)"' 2>/dev/null \
-    | awk -v n="$name" '$1==n { print $2; exit }' || true
+  local repo="$1" base count online name n=0
+  base="$(grt_machine_name)"; count="$(grt_repo_count "$repo")"
+  online="$(gh_api "repos/$repo/actions/runners" \
+    --jq '[.runners[] | select(.status=="online") | .name] | join(" ")' 2>/dev/null)" || online=""
+  for name in $online; do
+    case "$name" in "$base"-[0-9]|"$base"-[0-9][0-9]) n=$((n+1)) ;; esac
+  done
+  [ "$n" -gt 0 ] && printf '%s/%s online' "$n" "$count" || true
 }
 
-# --- bring one repo's runner up (gated, boot-safe, idempotent) --------------
+# --- container aggregate state ------------------------------------------------
+# echoes "k/N running" for the repo's runner containers, or "" if none exist.
+grt_containers_running() {
+  local repo="$1" count i n=0 seen=0
+  count="$(grt_repo_count "$repo")"
+  for i in $(seq 1 "$count"); do
+    case "$(grt_container_state "$(grt_container_name "$repo" "$i")")" in
+      running) n=$((n+1)); seen=1 ;;
+      '') : ;;
+      *) seen=1 ;;
+    esac
+  done
+  [ "$seen" -eq 1 ] && printf '%s/%s running' "$n" "$count" || true
+}
+
+# --- bring one repo's runners up (gated, boot-safe, idempotent) --------------
 grt_start_one() {
-  local repo="$1" mode container name old token
+  local repo="$1" mode count i container name old token started=0
   mode="$(grt_get_mode "$repo")"
   if [ "$mode" != "self-hosted" ]; then
     grt_log "$repo: RUNNER='$mode' (GitHub-hosted) — nothing to start."
     return 0
   fi
-  container="$(grt_container_name "$repo")"
-  name="$(grt_runner_name "$repo")"
-  if [ "$(grt_container_state "$container")" = "running" ]; then
-    grt_log "$repo: runner already running."
-    return 0
-  fi
+  count="$(grt_repo_count "$repo")"
   docker image inspect "$GRT_IMAGE" >/dev/null 2>&1 || { grt_log "pulling $GRT_IMAGE…"; docker pull "$GRT_IMAGE"; }
-  # No local runner is up, so any GitHub registration by this name is stale
-  # (e.g. left by an ungraceful shutdown) — remove it to avoid a name collision.
-  old="$(gh_api "repos/$repo/actions/runners" --jq '.runners[] | "\(.id) \(.name)"' 2>/dev/null \
-         | awk -v n="$name" '$2==n { print $1; exit }')"
-  if [ -n "$old" ]; then
-    grt_log "$repo: removing stale runner #$old…"
-    gh_api --method DELETE "repos/$repo/actions/runners/$old" >/dev/null 2>&1 || true
+
+  # Retire pre-multi-instance leftovers (the unsuffixed container and the old
+  # <repo>-pc registration) so an upgrade cleanly replaces them.
+  local legacy_container legacy_name legacy_id
+  legacy_container="$(grt_legacy_container_name "$repo")"
+  if [ -n "$(grt_container_state "$legacy_container")" ]; then
+    grt_log "$repo: retiring legacy container $legacy_container…"
+    docker stop "$legacy_container" >/dev/null 2>&1 || true
+    docker rm -f "$legacy_container" >/dev/null 2>&1 || true
   fi
-  grt_log "$repo: registering runner…"
-  token="$(gh_api --method POST "repos/$repo/actions/runners/registration-token" --jq .token)"
-  [ -n "$token" ] || { grt_log "$repo: could not get a registration token (check gh auth)."; return 1; }
-  docker rm -f "$container" >/dev/null 2>&1 || true
-  docker run -d --name "$container" --restart no \
-    -e REPO_URL="https://github.com/$repo" \
-    -e RUNNER_TOKEN="$token" \
-    -e RUNNER_NAME="$name" \
-    -e RUNNER_SCOPE="repo" \
-    -e LABELS="$GRT_LABEL" \
-    -e DISABLE_AUTO_UPDATE="true" \
-    "$GRT_IMAGE" >/dev/null
-  grt_log "$repo: runner started — backlog (if any) will begin shortly."
+  legacy_name="$(grt_legacy_runner_name "$repo")"
+  legacy_id="$(gh_api "repos/$repo/actions/runners" --jq '.runners[] | "\(.id) \(.name)"' 2>/dev/null \
+               | awk -v n="$legacy_name" '$2==n { print $1; exit }')" || legacy_id=""
+  if [ -n "$legacy_id" ]; then
+    grt_log "$repo: removing legacy runner registration $legacy_name (#$legacy_id)…"
+    gh_api --method DELETE "repos/$repo/actions/runners/$legacy_id" >/dev/null 2>&1 || true
+  fi
+
+  for i in $(seq 1 "$count"); do
+    container="$(grt_container_name "$repo" "$i")"
+    name="$(grt_runner_name "$i")"
+    if [ "$(grt_container_state "$container")" = "running" ]; then
+      grt_log "$repo: $name already running."
+      continue
+    fi
+    # No local container is up for this slot, so any GitHub registration by this
+    # name is stale (e.g. left by an ungraceful shutdown) — remove it to avoid a
+    # name collision.
+    old="$(gh_api "repos/$repo/actions/runners" --jq '.runners[] | "\(.id) \(.name)"' 2>/dev/null \
+           | awk -v n="$name" '$2==n { print $1; exit }')" || old=""
+    if [ -n "$old" ]; then
+      grt_log "$repo: removing stale runner #$old…"
+      gh_api --method DELETE "repos/$repo/actions/runners/$old" >/dev/null 2>&1 || true
+    fi
+    grt_log "$repo: registering $name…"
+    token="$(gh_api --method POST "repos/$repo/actions/runners/registration-token" --jq .token)"
+    [ -n "$token" ] || { grt_log "$repo: could not get a registration token (check gh auth)."; return 1; }
+    docker rm -f "$container" >/dev/null 2>&1 || true
+    docker run -d --name "$container" --restart no \
+      -e REPO_URL="https://github.com/$repo" \
+      -e RUNNER_TOKEN="$token" \
+      -e RUNNER_NAME="$name" \
+      -e RUNNER_SCOPE="repo" \
+      -e LABELS="$GRT_LABEL" \
+      -e DISABLE_AUTO_UPDATE="true" \
+      "$GRT_IMAGE" >/dev/null
+    started=$((started+1))
+  done
+  grt_log "$repo: $count runner(s) up ($started newly started) — backlog (if any) will begin shortly."
 }
 
-# --- take one repo's runner down (graceful deregister) ----------------------
+# --- take one repo's runners down (graceful deregister) ----------------------
 grt_stop_one() {
-  local repo="$1" container
-  container="$(grt_container_name "$repo")"
-  if [ -z "$(grt_container_state "$container")" ]; then
-    return 0
-  fi
-  grt_log "$repo: stopping runner (graceful deregister)…"
-  docker stop "$container" >/dev/null 2>&1 || true
-  docker rm "$container" >/dev/null 2>&1 || true
+  local repo="$1" slug c
+  slug="$(grt_repo_slug "$repo")"
+  # Match every instance (<repo>-runner-N) plus the legacy unsuffixed name, so
+  # count reductions and upgrades still clean up fully.
+  for c in $(docker ps -a --format '{{.Names}}' 2>/dev/null | grep -E "^${slug}-runner(-[0-9]+)?$" || true); do
+    grt_log "$repo: stopping $c (graceful deregister)…"
+    docker stop "$c" >/dev/null 2>&1 || true
+    docker rm "$c" >/dev/null 2>&1 || true
+  done
 }
 
 # --- billing -----------------------------------------------------------------

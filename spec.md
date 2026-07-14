@@ -70,7 +70,12 @@ Each covered repo has:
 - Image: `myoung34/github-runner:latest` — already bundles `git`, `jq`, and **AWS CLI v2**
   (needed by deploy/image workflows). Node is installed per-job by `actions/setup-node`, exactly
   like GitHub-hosted. No custom Dockerfile needed.
-- Registers with label `self-hosted`, name `<repo>-pc`.
+- Registers with label `self-hosted`, name `<machine>-<n>` (e.g. `sam-pc-1`) — the machine
+  name comes from `hostname` (override with `GRT_RUNNER_BASENAME`). The name says *where the
+  runner lives*; the registration itself is already repo-scoped. Container names stay
+  repo-prefixed (`<repo>-runner-<n>`) since Docker's namespace is shared across repos.
+- A repo can run **multiple instances** (the optional count column in `repos.txt`) so a
+  workflow's parallel jobs actually run in parallel instead of queueing on one runner.
 - Registration token fetched fresh each start via `gh api` — **no PAT stored on disk**.
 - `--restart no`; reboots are handled by the login entry (so it can refresh the token), not
   Docker's restart policy.
@@ -83,8 +88,8 @@ Each covered repo has:
 
 ### 4.5 Multi-repo model
 - Personal accounts only allow **repo-level** runners (no account-wide) — so covering N repos =
-  one container per repo. A config file lists which repos are covered; the boot script and CLI
-  loop over it.
+  one (or more, per the count column) container per repo. A config file lists which repos are
+  covered; the boot script and CLI loop over it.
 - (The alternative — one org-level runner for all — requires a GitHub org migration; see
   [Scaling](#6-scaling).)
 
