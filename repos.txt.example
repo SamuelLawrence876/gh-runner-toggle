@@ -8,7 +8,13 @@
 # (default 1). Use 2+ so a workflow's parallel jobs actually run in parallel
 # instead of queueing on a single runner.
 #
+# The optional `docker` token mounts the host Docker socket into that repo's
+# runners so docker-building jobs (e.g. `cdk deploy` with container image
+# assets) work self-hosted. OPT-IN ONLY: it hands that repo's CI control of
+# Docker on this PC (root-equivalent) — grant per repo you trust end-to-end.
+#
 # Lines starting with # and blank lines are ignored. Private repos only.
 #
 # owner/example-repo
 # owner/busy-repo 2
+# owner/docker-deploy-repo 2 docker

@@ -92,8 +92,13 @@ With no `[repo]`, the up/down/start/stop commands act on **all** repos in
 
 ## Configuration
 
-- `repos.txt` — covered repos, one `owner/name [count]` per line (count =
-  runner instances for that repo, default 1).
+- `repos.txt` — covered repos, one `owner/name [count] [docker]` per line
+  (count = runner instances for that repo, default 1; the `docker` token mounts
+  the host Docker socket into that repo's runners so docker-building jobs —
+  e.g. `cdk deploy` with container image assets — work self-hosted. **Opt-in
+  only:** it hands that repo's CI control of Docker on this PC, which is
+  root-equivalent — grant it per repo you trust end-to-end, incl. its npm
+  dependency tree).
 - Env overrides: `GRT_QUOTA` (included minutes/month, default `2000`),
   `GRT_MARGIN` (flip threshold, default `100`), `GRT_IMAGE`, `GRT_LABEL`,
   `GRT_CPUS` / `GRT_MEMORY` (per-container caps, default `4` / `6g`, `""` = uncapped),

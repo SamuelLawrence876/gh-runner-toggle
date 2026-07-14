@@ -76,6 +76,9 @@ Each covered repo has:
   repo-prefixed (`<repo>-runner-<n>`) since Docker's namespace is shared across repos.
 - A repo can run **multiple instances** (the optional count column in `repos.txt`) so a
   workflow's parallel jobs actually run in parallel instead of queueing on one runner.
+- A repo line can carry the **`docker` token**: its runners mount the host Docker socket so
+  docker-building jobs (container image assets in `cdk deploy`) work self-hosted. Opt-in only —
+  it hands that repo's CI root-equivalent control of this PC; the default stays isolated.
 - Registration token fetched fresh each start via `gh api` — **no PAT stored on disk**.
 - `--restart no`; reboots are handled by the login entry (so it can refresh the token), not
   Docker's restart policy.

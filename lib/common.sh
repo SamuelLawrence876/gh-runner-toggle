@@ -98,6 +98,18 @@ grt_repo_count() {
   printf '%s' "$n"
 }
 
+# Whether a repo's line carries the `docker` token (any column after the name).
+# Opt-in ONLY: mounts the host Docker socket into that repo's runners so
+# docker-building jobs (e.g. `cdk deploy` with container image assets) work
+# self-hosted. This hands the repo's CI control of Docker on this PC —
+# root-equivalent — so grant it per repo, never by default.
+grt_repo_docker() {
+  [ -f "$GRT_REPOS_FILE" ] || return 1
+  sed -E 's/#.*$//' "$GRT_REPOS_FILE" \
+    | awk -v r="$1" '$1==r { for (i=2; i<=NF; i++) if ($i=="docker") found=1; exit }
+                     END { exit found ? 0 : 1 }'
+}
+
 # Which repos a command acts on: its args if any, else every covered repo.
 grt_resolve_repos() {
   if [ "$#" -gt 0 ]; then printf '%s\n' "$@"; else grt_all_repos; fi
@@ -269,7 +281,12 @@ grt_start_one() {
     caps=()
     [ -n "$GRT_CPUS" ] && caps+=(--cpus "$GRT_CPUS")
     [ -n "$GRT_MEMORY" ] && caps+=(--memory "$GRT_MEMORY")
-    docker run -d --name "$container" --restart no "${caps[@]}" \
+    # `docker` token in repos.txt: mount the host Docker socket so this repo's
+    # jobs can docker-build (see grt_repo_docker for the security tradeoff).
+    if grt_repo_docker "$repo"; then
+      caps+=(-v "/var/run/docker.sock:/var/run/docker.sock")
+    fi
+    MSYS_NO_PATHCONV=1 docker run -d --name "$container" --restart no "${caps[@]}" \
       -e REPO_URL="https://github.com/$repo" \
       -e RUNNER_TOKEN="$token" \
       -e RUNNER_NAME="$name" \
