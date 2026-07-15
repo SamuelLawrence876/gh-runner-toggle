@@ -8,5 +8,6 @@ repos.txt
 # logs written by the auto-start / auto-flip entries
 *.log
 
-# generated Task Scheduler wrapper
+# generated Task Scheduler wrapper + hidden launcher
 autoflip-task.cmd
+autoflip-task.vbs

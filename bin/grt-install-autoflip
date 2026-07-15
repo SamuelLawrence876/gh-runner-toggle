@@ -12,6 +12,7 @@ BASH_EXE="${GRT_BASH_EXE:-C:\\Program Files\\Git\\bin\\bash.exe}"
 INTERVAL="${GRT_AUTOFLIP_MINUTES:-30}"
 TASK="gh-runner-toggle autoflip"
 WRAPPER="$GRT_ROOT/autoflip-task.cmd"
+LAUNCHER="$GRT_ROOT/autoflip-task.vbs"
 LOG="$GRT_ROOT/autoflip.log"
 
 # Wrapper .cmd so Task Scheduler has a single, quoting-safe target.
@@ -22,10 +23,20 @@ REM gh-runner-toggle auto-flip check. Managed by grt-install-autoflip.
 EOF
 grt_log "wrote auto-flip wrapper: $WRAPPER"
 
+# VBS launcher: the task runs in the interactive session (needed for the gh
+# keyring + Docker), where a direct .cmd target flashes a console window every
+# run. wscript has no console, and Run(..., 0) starts the .cmd hidden.
 WRAPPER_WIN="$(cygpath -w "$WRAPPER")"
+cat > "$LAUNCHER" <<EOF
+' gh-runner-toggle auto-flip hidden launcher. Managed by grt-install-autoflip.
+CreateObject("WScript.Shell").Run """$WRAPPER_WIN""", 0, False
+EOF
+grt_log "wrote hidden launcher: $LAUNCHER"
+
+LAUNCHER_WIN="$(cygpath -w "$LAUNCHER")"
 MSYS_NO_PATHCONV=1 schtasks /Create \
   /TN "$TASK" \
-  /TR "\"$WRAPPER_WIN\"" \
+  /TR "wscript.exe \"$LAUNCHER_WIN\"" \
   /SC MINUTE /MO "$INTERVAL" \
   /F >/dev/null
 
