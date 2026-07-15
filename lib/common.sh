@@ -22,9 +22,12 @@ GRT_LABEL="${GRT_LABEL:-self-hosted}"
 GRT_QUOTA="${GRT_QUOTA:-2000}"    # included Actions minutes/month (free plan)
 GRT_MARGIN="${GRT_MARGIN:-100}"   # flip to self-hosted when remaining < this
 # Per-container resource caps so busy runners can't saturate the PC while it's
-# in use. Set to "" to uncap.
+# in use. Set to "" to uncap. Size memory so (max concurrent runners × cap)
+# stays within the Docker Desktop VM's allocation — the caps are hard limits,
+# and if the SUM of live usage exceeds the VM the kernel OOM-kills jobs before
+# any single container reaches its own cap.
 GRT_CPUS="${GRT_CPUS:-4}"
-GRT_MEMORY="${GRT_MEMORY:-6g}"
+GRT_MEMORY="${GRT_MEMORY:-4g}"
 # Re-pull the runner image when the local copy is older than this. GitHub
 # force-retires old runner clients, so a never-refreshed image is a time bomb:
 # everything looks online while every job fails "runner version too old".
